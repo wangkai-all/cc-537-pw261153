@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>车载速度记录 · 采样接入与分段线性压缩</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --gridline: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-critical: #d03b3b;
+    --good-text: #006300;
+    --wash: rgba(42,120,214,0.10);
+    --wash-2: rgba(235,104,52,0.14);
+    --gap-wash: rgba(137,135,129,0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --gridline: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --good-text: #0ca30c;
+      --wash: rgba(57,135,229,0.16);
+      --wash-2: rgba(217,89,38,0.20);
+      --gap-wash: rgba(137,135,129,0.18);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --good-text: #0ca30c;
+    --wash: rgba(57,135,229,0.16);
+    --wash-2: rgba(217,89,38,0.20);
+    --gap-wash: rgba(137,135,129,0.18);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  header.app-header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 20px 28px 12px;
+  }
+  header.app-header h1 { font-size: 20px; margin: 0; }
+  header.app-header .sub { color: var(--text-secondary); margin: 0; flex: 1; }
+  main { padding: 0 28px 48px; max-width: 1180px; margin: 0 auto; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin: 14px 0;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .card h3 { font-size: 13px; margin: 16px 0 6px; color: var(--text-secondary); font-weight: 600; }
+  .hidden { display: none !important; }
+  button {
+    font: inherit;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-primary);
+    border-radius: 7px;
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--wash); }
+  button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.small { padding: 3px 10px; font-size: 12.5px; }
+  button[aria-pressed="true"] { background: var(--wash); border-color: var(--series-1); }
+  input[type="number"], input[type="text"], select, textarea {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 9px;
+  }
+  textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  label.field { display: inline-flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--text-secondary); }
+  label.field input, label.field select { width: 130px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .sample-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .sample-row .tip { color: var(--muted); font-size: 12.5px; }
+  .input-grid { display: grid; grid-template-columns: 1fr 240px; gap: 14px; }
+  @media (max-width: 800px) { .input-grid { grid-template-columns: 1fr; } }
+  .summary { color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
+  .summary.bad { color: var(--status-critical); }
+  .tiles { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+  .tile {
+    border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px;
+    min-width: 128px; background: var(--surface-1);
+  }
+  .tile .t-label { font-size: 12px; color: var(--text-secondary); }
+  .tile .t-value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .tile .t-sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .banner {
+    border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 13.5px;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .banner .icon { font-weight: 700; }
+  .banner.good { background: rgba(12,163,12,0.10); border: 1px solid rgba(12,163,12,0.35); }
+  .banner.good .icon { color: var(--status-good); }
+  .banner.bad { background: rgba(208,59,59,0.10); border: 1px solid rgba(208,59,59,0.40); }
+  .banner.bad .icon { color: var(--status-critical); }
+  .banner ul { margin: 4px 0 0; padding-left: 18px; }
+  .row-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); margin: 4px 0 2px; }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .line-key { width: 18px; height: 0; border-top: 2px solid; border-radius: 1px; }
+  .legend .dot-key { width: 8px; height: 8px; border-radius: 50%; }
+  .chart-wrap { position: relative; margin-top: 10px; }
+  .chart-wrap h3 { margin: 8px 0 2px; }
+  canvas.chart { display: block; width: 100%; }
+  .tooltip {
+    position: fixed; z-index: 30; pointer-events: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 11px; font-size: 12.5px; box-shadow: 0 4px 18px rgba(0,0,0,0.14);
+    min-width: 170px;
+  }
+  .tooltip .tt-title { color: var(--muted); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; justify-content: space-between; gap: 14px; }
+  .tooltip .tt-row .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .tooltip .tt-row .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tooltip .line-key { display: inline-block; width: 12px; height: 0; border-top: 2px solid; }
+  .table-scroll { overflow: auto; max-height: 420px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { padding: 5px 10px; text-align: right; border-bottom: 1px solid var(--gridline); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+  td.num, th.num { font-variant-numeric: tabular-nums; }
+  tr.run-head td { background: var(--wash); text-align: left; font-weight: 600; color: var(--text-secondary); }
+  tr.worst td { background: var(--wash-2); }
+  .conflict-group { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+  .conflict-group .cg-title { font-weight: 600; margin-bottom: 6px; }
+  .conflict-group .cg-status { font-size: 12.5px; margin-left: 8px; }
+  .conflict-group .cg-status.isolated { color: var(--status-critical); }
+  .conflict-group .cg-status.fixed { color: var(--good-text); }
+  .conflict-group label { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
+  .conflict-group .orig { color: var(--muted); font-size: 12px; }
+  .conflict-group .fix-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .conflict-group input.cg-value { width: 110px; }
+  details.format-doc { margin-top: 10px; font-size: 12.5px; color: var(--text-secondary); }
+  details.format-doc summary { cursor: pointer; color: var(--text-primary); }
+  details.format-doc code { background: var(--wash); padding: 1px 5px; border-radius: 4px; }
+  .verify-meta { font-size: 12.5px; color: var(--text-secondary); margin: 8px 0; }
+  .footnote { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header class="app-header">
+  <h1>车载速度记录 · 采样接入与分段线性压缩</h1>
+  <p class="sub">误差双预算（速度 / 里程）· 缺口与停机切断 · 可下载、可独立解码核对的分段线性文件</p>
+  <button id="themeToggle" type="button">切换深色</button>
+</header>
+<main>
+  <section class="card" id="sec-input">
+    <h2>1 · 数据接入</h2>
+    <div class="sample-row" id="sampleRow"><span class="tip">示例数据：</span></div>
+    <div class="input-grid">
+      <div>
+        <textarea id="csvInput" rows="9" spellcheck="false"
+          placeholder="time,speed,unit,flag&#10;0,60,km/h,&#10;10,60,km/h,&#10;..."></textarea>
+        <div class="summary" id="parseSummary">尚未导入数据。</div>
+      </div>
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
+        <label class="field">选择 CSV 文件
+          <input type="file" id="fileInput" accept=".csv,.txt,.tsv">
+        </label>
+        <label class="field">默认速度单位（行内 unit 列优先）
+          <select id="defaultUnit">
+            <option value="km/h" selected>km/h</option>
+            <option value="m/s">m/s</option>
+            <option value="mph">mph</option>
+          </select>
+        </label>
+        <button id="parseBtn" class="primary" type="button">导入解析</button>
+      </div>
+    </div>
+    <details class="format-doc">
+      <summary>输入格式说明</summary>
+      <p>CSV 文本，表头识别 <code>time,speed,unit,flag</code>（大小写不敏感，支持 时间/速度/单位/标记）；
+      无表头时取前两列为时间、速度。时间支持相对秒、epoch 秒/毫秒、ISO 字符串；速度单位支持
+      <code>km/h</code>、<code>m/s</code>、<code>mph</code>，导入后统一换算为米每秒。采样间隔可以不固定。</p>
+      <p><code>flag</code> 列为 <code>stop</code>/<code>停机</code> 的记录是停机标记：只切断连续区间，不作为速度样本。
+      相同时间戳且速度冲突的记录整组隔离（原值保留，见第 3 区），修正后才参与压缩。</p>
+    </details>
+  </section>
+
+  <section class="card" id="sec-params">
+    <h2>2 · 误差预算与压缩参数</h2>
+    <div class="row">
+      <label class="field">速度误差预算（m/s）
+        <input type="number" id="speedEps" value="0.5" min="0" step="0.1">
+      </label>
+      <label class="field">里程误差预算（m）
+        <input type="number" id="distEps" value="20" min="0" step="1">
+      </label>
+      <label class="field">采样缺口阈值（s，超过即切断）
+        <input type="number" id="gapThreshold" value="60" min="0" step="1">
+      </label>
+      <button id="rebuildBtn" class="primary" type="button">重新压缩</button>
+    </div>
+    <p class="footnote">修改预算即重新压缩并重新核对。约束口径：解码后每个原采样时刻的速度误差 ≤ 速度预算；
+    每个连续区间内，累计有符号里程偏差（相对原始梯形积分）在每个原采样时刻的绝对值 ≤ 里程预算——不是只看区间末端。</p>
+  </section>
+
+  <section class="card hidden" id="sec-conflicts">
+    <h2>3 · 同刻冲突记录（已隔离，原值保留）</h2>
+    <div id="conflictList"></div>
+  </section>
+
+  <section class="card hidden" id="sec-results">
+    <h2>4 · 压缩结果与文件回读校验</h2>
+    <div id="statusBanner"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="row-actions">
+      <button id="downloadBtn" class="primary" type="button">下载压缩文件（JSON）</button>
+      <button id="locateBtn" type="button">定位最接近上限的一段</button>
+      <button id="tableToggle" type="button" aria-pressed="false">切换为表格视图</button>
+    </div>
+    <div id="chartArea">
+      <div class="legend" id="chartLegend"></div>
+      <div class="chart-wrap"><h3>速度对照：原始曲线 vs 文件解码曲线</h3><canvas id="chSpeed" class="chart" role="img" aria-label="原始速度与解码速度对照曲线"></canvas></div>
+      <div class="chart-wrap"><h3>每个原采样时刻的速度误差（m/s）</h3><canvas id="chErr" class="chart" role="img" aria-label="逐采样时刻速度误差"></canvas></div>
+      <div class="chart-wrap"><h3>连续区间内累计有符号里程偏差（m）</h3><canvas id="chDist" class="chart" role="img" aria-label="累计里程偏差曲线"></canvas></div>
+    </div>
+    <div id="tableArea" class="hidden">
+      <h3>逐采样点核对表（与图表同源，来自文件回读）</h3>
+      <div class="table-scroll"><table id="sampleTable"></table></div>
+    </div>
+    <h3>分段明细</h3>
+    <div class="table-scroll"><table id="segTable"></table></div>
+    <p class="footnote">校验方式：压缩结果先序列化为文件文本，独立解码器只解析该文本（不读内存对象），
+    再与原始输入逐点核对——图表只是核对结果的可视化，不替代文件校验。</p>
+  </section>
+
+  <section class="card" id="sec-verify">
+    <h2>5 · 独立解码器校验（只读压缩文件）</h2>
+    <div class="row">
+      <label class="field">上传此前下载的压缩文件
+        <input type="file" id="verifyInput" accept=".json,application/json">
+      </label>
+    </div>
+    <div id="verifyResult" class="verify-meta">解码器只读取文件内容（单位、断点、压缩参数），再与当前第 1 区的原始输入逐点核对。</div>
+  </section>
+</main>
+<script src="core.js"></script>
+<script src="samples.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
